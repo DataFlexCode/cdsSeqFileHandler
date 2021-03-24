@@ -1,0 +1,964 @@
+﻿Use seq_chnl.pkg
+Use GlobalFunctionsProcedures.pkg
+
+//---------------------------------------------------
+//
+//  Global functions provided here (normally part of 
+//  a separate library
+//
+//---------------------------------------------------
+
+//---------------------------------------------------
+//
+// Function     : SubStrCount
+//
+// Scope        : Public Global Method
+//
+// Paramaters   : {sSubStr},{sHostStr}
+//                {sSubStr}  is the string you want to search for (to know how many instances)
+//                {sHostStr} is the string in which you are searching.
+//
+// Returns      : String
+//
+// Purpose      : Returns a count of the number of times one string appears inside another
+//                eg. SubStrCount("the","the quick brown fox jumped over the lazy dog") would return 2
+//                
+// Notes        :
+//
+//---------------------------------------------------
+Function SubStrCount Global String sSubStr String sHostStr Returns Integer
+    Integer iCount iPos
+
+    Move (Pos(sSubStr,sHostStr)) to iPos
+    While (iPos>0)
+        Increment iCount
+        Move (Pos(sSubStr,sHostStr,iPos+1)) to iPos
+    Loop
+    Function_Return iCount
+End_Function
+
+//---------------------------------------------------
+//
+// Function     : Format_FilePath
+//
+// Scope        : Public Global Method
+//
+// Paramaters   : {sPath}
+//                {sPath} is a directory path
+//
+// Returns      : String
+//
+// Purpose      : Formats a directory path by making sure if ends with a directory separator.
+//                If not, it gets added.
+//                Eg. Get psDataPath of (phoWorkspace(ghoApplication)) to sPath
+//                Move (Format_FilePath(sPath)+"Filename.Ext") to sFile 
+//                Sometimes you cannot remember if a path already ends in the separator or not, 
+//                so this Function just makes sure 
+//
+// Notes        :
+//
+//---------------------------------------------------
+
+Function Format_FilePath Global String sPath Returns String
+    Move (Trim(sPath)) to sPath
+    If ((Length(sPath)>0) and (Right(sPath,1)<>SysConf(SYSCONF_DIR_SEPARATOR))) Begin
+        Move (sPath-SysConf(SYSCONF_DIR_SEPARATOR)) to sPath
+    End
+    Function_Return sPath
+End_Function
+
+//---------------------------------------------------
+//
+// Function     : SReplaces
+//
+// Scope        : Public Global Method
+//
+// Paramaters   : {old-substring},{host-string},{new-substring}
+//                {old-substring} is the substring of {host-string} to replace,
+//                {host-string}   is the String value to make the replacement in,
+//                {new-substring} is the String value to replace {old-substring} with
+//
+// Returns      : String
+//
+// Purpose      : Unlike with Replaces (which works through the string from left to right) this SReplaces function will always jump back to the
+//                start of the string when looking for the next instance to replace.
+//                For example: Move ( Replaces("**","*****","*")) will return "***"
+//                where as     Move (SReplaces("**","*****","*")) will return "*"
+//
+// Notes        :
+//
+//---------------------------------------------------
+
+Function SReplaces Global String s String sSource String sWith Returns String
+    While (Pos(s,sSource)>0)
+        Move (Replace(s,sSource,sWith)) to sSource
+    Loop
+    Function_Return sSource
+End_Function
+
+//---------------------------------------------------
+
+#IFNDEF C_$CLF
+    Define C_$CLF for (character(13)+ character(10)) 
+#ENDIF
+
+Enum_List
+    Define faUndefined 
+    Define faRead
+    Define faWrite
+    Define faAppend
+End_Enum_List
+
+Enum_List
+    Define fmPCText
+    Define fmBinary
+End_Enum_List
+
+Define C_Seq_File_Error_None             for 0
+Define C_Seq_File_Error_File_Not_Found   for 1
+Define C_Seq_File_Error_End_Of_Data      for 2
+
+Define FILE_FIRST_ROW for 0
+Define FILE_NEXT_ROW  for 1
+
+// IMPORTANT!!! THIS LIST NEEDS TO BE DEFINED IN THE ORDER OF
+// LONGEST BOM TO SHORTEST (such that looping logic will be reliable)
+Enum_List
+    Define eBomNone
+    Define eBomUtf7
+    Define eBomUtf32be
+    Define eBomUtf32le
+    Define eBomUtfEBCDIC
+    Define eBomGB18030
+    Define eBomUtf8
+    Define eBomUtf1
+    Define eBomSCSU
+    Define eBomBOCU1
+    Define eBomUtf16be
+    Define eBomUtf16le
+End_Enum_List
+
+// ToDo: Wonder if it's possible to use the cRecordBuffer class here?
+// We could then allow setting Field_Options for formatting values as they are 
+// either read in or output to file.
+{Visibility=Private}
+Class cdsSeqFileHandlerRow is a cObject
+
+    Procedure Construct_Object
+        Forward Send Construct_Object
+        {Visibility=Private}
+        Property String[] psaRowValues
+        {Visibility=Private}
+        Property Integer piColumnCount
+        {Visibility=Private}
+        Property Integer piRowIndex
+        {Visibility=Private}
+        Property Boolean pbEof
+    End_Procedure
+    
+    Procedure Delete_Data
+        String[] saValues
+        Set psaRowValues to saValues
+    End_Procedure
+    
+    Procedure Initialise
+        Send Delete_Data
+        Set piRowIndex    to 0
+        Set piColumnCount to 0
+        Set pbEof         to False
+    End_Procedure
+
+    Procedure Add_Value String sValue
+        Integer  iCount
+        String   sQualifier
+        String[] saValues
+        
+        Delegate Get psTextQualifier to sQualifier
+        If (Left(sValue,1)=sQualifier and Right(sValue,1)=sQualifier) Begin
+            Move (Mid(sValue,Length(sValue)-2,2)) to sValue
+        End 
+        Move (SReplaces(sQualifier+sQualifier,sValue,sQualifier)) to sValue
+        
+        Get psaRowValues to saValues
+        Move sValue to saValues[SizeOfArray(saValues)]
+        Set psaRowValues to saValues
+        Get piColumnCount to iCount
+        Set piColumnCount to (SizeOfArray(saValues) max iCount) 
+    End_Procedure
+
+    Procedure Load_Row 
+        Integer iCh iLen ebom iPosDelimeter iQualCount iRowCount iPos
+        String  sDelimiter sQualifier sRow sValue s
+        Boolean bInUse bInsideQual bEof bAutoRemoveByteOrderMark bPreserveCRLF
+
+        Delegate Get piChannelIndex  to iCh
+        Delegate Get psDelimiter     to sDelimiter
+        Delegate Get psTextQualifier to sQualifier
+        Delegate Get pbInUse         to bInUse
+        Delegate Get pbPreserveCRLF  to bPreserveCRLF
+        
+        Send Delete_Data
+        Readln channel iCh sRow
+        Move (SeqEof) to bEof
+        If (not(bInUse)) Begin
+            Delegate Get pbAutoRemoveByteOrderMark to bAutoRemoveByteOrderMark 
+            If bAutoRemoveByteOrderMark Begin
+                Delegate Send RemoveByteOrderMark (&sRow) (&ebom) 
+                Delegate Set peFoundByteOrderMark to ebom
+            End
+            Move True to bInUse
+            Set pbInUse to bInUse     
+        End
+        If (sDelimiter>'' and sQualifier>'') Begin
+            // if the last row value is blank, the logic will not see it, so we can remedy this
+            // by adding an additional blank value
+            If (Right(sRow,1)=sDelimiter) Begin
+                Move (Length(sRow)) to iLen
+                Move (RightPos(sDelimiter,sRow,1,iLen-1)) to iPos
+                Move (Right(sRow,iLen-iPos)) to s
+                Move (SubStrCount(sQualifier,s)) to iQualCount
+                If (Mod(iQualCount,2)=0) Begin
+                    Add sDelimiter to sRow    
+                End
+            End
+            While (Length(sRow)>0 or bInsideQual)
+                Move (Pos(sDelimiter,sRow)) to iPosDelimeter
+                If (iPosDelimeter>0) Begin
+                    Add  (Left(sRow,iPosDelimeter-1)) to sValue
+                    Move (Left(sRow,iPosDelimeter-1)) to s
+                    Move (Replace(s+sDelimiter,sRow,'')) to sRow
+                    Move (SubStrCount(sQualifier,sValue)) to iQualCount
+                    If (Mod(iQualCount,2)=0) Begin
+                        If (Pos(sDelimiter,sValue)=0) Begin
+                            If (Left(sValue,1)=sQualifier and Right(sValue,1)=sQualifier) Begin
+                                Move (Mid(sValue,Length(sValue)-2,2)) to sValue   
+                            End
+                            Move (Replaces(sQualifier+sQualifier,sValue,sQualifier)) to sValue
+                        End
+                        Send Add_Value sValue
+                        Move '' to sValue
+                        Move False to bInsideQual
+                    End
+                    Else Begin
+                        Move True to bInsideQual
+                    End
+                    If bInsideQual Begin
+                        Add sDelimiter to sValue    // it was removed, but we need to preserve it (ie. put it back)
+                    End
+                End
+                Else Begin
+                    If (sRow>'') Begin
+                        // deal with embedded carriage returns by now reading onto the next line
+                        Move (SubStrCount(sQualifier,sRow)) to iQualCount
+                        Move (Mod(iQualCount,2)=1) to bInsideQual                
+                    End
+                    If bInsideQual Begin
+                        Readln channel iCh s                
+                        Move (SeqEof) to bEof
+                        If (bPreserveCRLF) Begin
+                            Move (sRow+C_$CLF+s) to sRow
+                        End
+                        Else If (Left(s,1)=' ' or Right(sRow,1)=' ') Begin
+                            Move (sRow+s) to sRow
+                        End
+                        Else Begin
+                            Move (sRow*s) to sRow
+                        End
+                    End
+                    // the final row value can be dealt with by adding a delimeter and going once more around the loop
+                    Else Begin
+                        Add sDelimiter to sRow
+                    End
+                End
+            Loop            
+        End
+        Else Begin
+            Send Add_Value sRow    
+        End
+        Get piRowIndex to iRowCount
+        Increment iRowCount
+        Set piRowIndex to iRowCount
+        Set pbEof to bEof
+    End_Procedure
+    
+    Function Row_Values Returns String[]
+        Integer iColumns
+        String[] saValues
+        
+        Get psaRowValues  to saValues
+        Get piColumnCount to iColumns
+        If (SizeOfArray(saValues)<iColumns) Begin
+            Move (ResizeArray(saValues,iColumns)) to saValues        
+        End
+        Function_Return saValues
+    End_Function
+    
+    // 1 based.
+    Function Row_Value Integer iIndex Returns String
+        Integer iValues
+        String[] saValues
+        
+        Get psaRowValues to saValues
+        Move (SizeOfArray(saValues)) to iValues
+        If (iIndex<=iValues) Begin
+            Function_Return saValues[iIndex-1 max 0]  
+        End
+        Function_Return ''
+    End_Function
+    
+    // 1 based.
+    Procedure Set Row_Value Integer iIndex String sValue
+        Integer iValues iCount
+        String[] saValues
+        
+        Get psaRowValues to saValues
+        Move (SizeOfArray(saValues)) to iValues
+        If (iIndex>iValues) Begin
+            Move (ResizeArray(saValues,iIndex)) to saValues
+        End
+        Move sValue to saValues[iIndex-1]
+        Set psaRowValues to saValues
+        Get piColumnCount to iCount
+        Set piColumnCount to (SizeOfArray(saValues) max iCount) 
+    End_Procedure 
+   
+    Function RowStr Returns String
+        String   sRow sDelimiter
+        Integer  i
+        Boolean  bData
+        String[] saValues
+        
+        Get Row_Values to saValues
+        For i from 0 to (SizeOfArray(saValues)-1)
+            If (Length(Trim(saValues[i]))>0) Begin
+                Move True to bData
+            End
+            If bData ;
+                Break
+        Loop
+        If bData Begin
+            Delegate Get psDelimiter to sDelimiter
+            Move (StrJoinFromArray(saValues,sDelimiter)) to sRow
+        End
+        Function_Return sRow
+    End_Function
+End_Class
+
+// Example Usage: 1. Reading (line by line) 
+//
+// Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+// Set psFileName of hoFileHandler to <FileName>
+// Send Read_Line of hoFileHandler FILE_FIRST_ROW
+// While (Found)
+//     //.... and then either ....
+//     Get Fetch_Row of hoFileHandler to sRow                    // returns whole row
+//     //.... or .....
+//     Get Fetch_Row_Value of hoFileHandler <iColumn> to sValue  // returns identified row value
+//     //.... do whatever ....
+//     Send Read_Line of hoFileHandler FILE_NEXT_ROW
+// Loop
+// Send Destroy of hoFileHandler
+//
+// *****
+//
+// Example Usage: 2. Reading (an entire file) 
+//
+// Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+// Set psFileName of hoFileHandler to <FileName>
+// Get Read_File  of hoFileHandler to uaChar                            // a uChar array. BOM is removed automatically.
+// Send Destroy of hoFileHandler
+//
+// *****
+//
+// Example Usage: 3. Reading (line by line, with Read and ReadLn) 
+//
+// Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+// Set psFileName   of hoFileHandler to <FileName>
+// Get Open_Channel of hoFileHandler to iCh
+// .... and then Read and ReadLn "as normal" (using iCh)
+// ie. ReadLn Channel iCh to sData
+//     Read   Channel iCh to sData
+// .... BUT REMEMBER TO CHECK FOR A BOM (Byte Order Marker)
+// .... which means that for the first VALUE/ROW read in you would need...
+// Send RemoveByteOrderMark of hoFileHandler (&sData) 
+//
+// Send Close_Channel   // OPTIONAL because the Destroy will do this for you.
+//
+// Send Destroy of hoFileHandler
+//
+// *****
+//
+// Example Usage: 4. Writing (line by line)
+//
+// Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+// Set psFileName  of hoFileHandler to <FileName>
+// Set psHeaderRow of hoFileHandler to 'Column One,Column Two,Column Three' // will be written as the first line. Optional.
+// .... and then either ....
+// Send Write_Line of hoFileHandler <sLine>                     // writes this complete line to a file (as a WriteLn)
+//     .... or .....
+// Send Clear    of hoFileHandler                               // Clears the row buffer. Important.
+// Set Row_Value of hoFileHandler <iColumn Number> to sValue1
+// Set Row_Value of hoFileHandler <iColumn Number> to sValue2
+// Set Row_Value of hoFileHandler <iColumn Number> to sValue3
+// Send Write_Line of hoFileHandler                             // with no argument it will look to write out the contents of the Row Buffer, set with "Set Row_Value"
+//     .... whatever ....
+// Send Destroy of hoFileHandler
+//
+// *****
+//
+// Example Usage: 5. Writing (line by line, with Write and WriteLn) 
+//
+// Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+// Set psFileName of hoFileHandler to <FileName>
+// Get Open_Channel of hoFileHandler to iCh
+// .... and then Write and WriteLn "as normal" (using iCh)
+// ie. WriteLn Channel iCh sData
+//     Write   Channel iCh sData
+// .... BUT REMEMBER TO ADD A BOM (Byte Order Marker)
+// .... which means that for the first VALUE/ROW written out you would need...
+// Get AddByteOrderMark of hoFileHandler eBomUtf8 (&sData)
+// Write/WriteLn Channel iCh sData
+//
+// Send Close_Channel   // OPTIONAL because the Destroy will do this for you.
+//
+// Send Destroy of hoFileHandler
+//
+// *****
+//
+// Example Usage: 6. Writing (an entire file) 
+//
+// Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+// Set psFileName  of hoFileHandler to <FileName>
+// Send Write_File of hoFileHandler uaChar          // a uChar array. BOM is added automatically.
+// Send Destroy of hoFileHandler
+//
+// *****
+//
+// TO DO:
+//
+// 1. One for the future! Consider chaning the cdsSeqFileHandlerRow class to a cRecordBuffer
+//
+//    This way we could allow "columns" to support Field_Options, meaning we can set formatting rules
+//    for things like length, uppercase, perhaps even data type etc. 
+//    But there's no rush for this.
+
+
+{ OverrideProperty=Delegation_Mode DesignTime=False }
+{ OverrideProperty=peNeighborhood  DesignTime=False }
+Class cdsSeqFileHandler is a cObject
+    
+    Procedure Construct_Object
+        Forward Send Construct_Object
+
+        {Category="Behavior"}
+        {EnumList="faUndefined,faRead,faWrite,faAppend"}
+        {InitialValue=faUndefined}
+        Property Integer peFileAccess               faUndefined     // If left as Undefined it will be set automatically based on the first operation.
+        {Category="Behavior"}
+        Property String  psFileName                                 // The filename must be fully-qualified, meaning it must contain a path.        
+        {Category="Behavior"}
+        {EnumList="fmPCText,fmBinary"}
+        {InitialValue=fmPCText}
+        Property Integer peFileMode                 fmPCText                                      
+        {Category="Write Behavior"}
+        Property Boolean pbDeleteOnNoWrite          True            // by default, any files that we create for writing will be deleted if not written to.
+        {Category="Write Behavior"}
+        {EnumList ="eBomUtf8,eBomUtf16be,eBomUtf16le,eBomUtf32be,eBomUtf32le"}
+        {EnumList+="eBomUtf7,eBomUtf1,eBomUtfEBCDIC,eBomSCSU,eBomBOCU1,eBomGB18030"}
+        {InitialValue=eBomUtf8}
+        Property Integer peByteOrderMark            eBomUtf8        // ToDo: We have eBomNone, so why not offer it here such that we don't need a separate pbAutoAddByteOrderMark property?
+        {Category="Read Behavior"}
+        Property Boolean pbAutoRemoveByteOrderMark  True
+        {Category="Write Behavior"}
+        Property Boolean pbAutoAddByteOrderMark     True
+        {Category="Write Behavior"}
+        Property String  psHeaderRow                ''              // Leave blank if file requires no header row.  
+        {Category="Read Behavior"}                  
+        Property Boolean pbSkipBlankRows            True
+        {Category="Read Behavior"}         
+        Property Boolean pbPreserveCRLF             False
+                                                    
+        {Category="Behavior"}                       
+        Property String  psDelimiter                ','
+        {Category="Behavior"}                       
+        Property String  psTextQualifier            '"'
+                                                    
+                                                    
+        {Visibility=Private}                        
+        Property Integer piChannelIndex             DF_SEQ_CHANNEL_NOT_AVAILABLE 
+        {Visibility=Private}                        
+        Property Boolean pbInUse                    False
+        {Visibility=Private}                        
+        Property Integer peFoundByteOrderMark       eBomNone
+        
+        {Visibility=Private}
+        Object oSeqFileHandlerRow is a cdsSeqFileHandlerRow
+        End_Object
+    End_Procedure
+    
+    // See https://en.wikipedia.org/wiki/Byte_order_mark for BOM definitions
+    {Visibility=Private}
+    Function ByteOrderMarksByEncoding Integer eEncoding Integer iIndex Returns UChar[]
+        UChar[] uaBom
+
+        If (num_arguments<2 and eEncoding=eBomUtf7) Begin
+            Error DFERR_PROGRAM 'Insufficient BOM information provided'
+            Function_Return uaBom
+        End
+        
+        Case Begin
+            Case (eEncoding=eBomUtf8)
+                Move 239 to uaBom[0]
+                Move 187 to uaBom[1]
+                Move 191 to uaBom[2]
+                Case Break    
+            Case (eEncoding=eBomUtf16be)
+            Case (eEncoding=eBomUtf16le)
+                Move 254 to uaBom[0]
+                Move 255 to uaBom[1]
+                If (eEncoding=eBomUtf16le) Begin
+                    Move (ReverseArray(uaBom)) to uaBom
+                End
+                Case Break 
+            Case (eEncoding=eBomUtf32be)
+            Case (eEncoding=eBomUtf32le)
+                Move   0 to uaBom[0]
+                Move   0 to uaBom[1]
+                Move 254 to uaBom[2]
+                Move 255 to uaBom[3]
+                If (eEncoding=eBomUtf32le) Begin
+                    Move (ReverseArray(uaBom)) to uaBom
+                End
+                Case Break 
+            Case (eEncoding=eBomUtf1)
+                Move 247 to uaBom[0]
+                Move 100 to uaBom[1]
+                Move  76 to uaBom[2]
+                Case Break  
+            Case (eEncoding=eBomUtfEBCDIC)
+                Move 221 to uaBom[0]
+                Move 115 to uaBom[1]
+                Move 102 to uaBom[2]
+                Move 115 to uaBom[3]
+                Case Break  
+            Case (eEncoding=eBomSCSU)
+                Move  14 to uaBom[0]
+                Move 254 to uaBom[1]
+                Move 255 to uaBom[2]
+                Case Break   
+            Case (eEncoding=eBomBOCU1)
+                Move 251 to uaBom[0]
+                Move 238 to uaBom[1]
+                Move  40 to uaBom[2]
+                Case Break  
+            Case (eEncoding=eBomGB18030)
+                Move 132 to uaBom[0]
+                Move  49 to uaBom[1]
+                Move 149 to uaBom[2]
+                Move  51 to uaBom[3]
+                Case Break  
+            Case (eEncoding=eBomUtf7)
+                Move  43 to uaBom[0]
+                Move  47 to uaBom[1]
+                Move 118 to uaBom[2]
+                If      (iIndex=1) Begin
+                    Move  56 to uaBom[3]
+                End
+                Else If (iIndex=2) Begin
+                    Move  57 to uaBom[3]   
+                End
+                Else If (iIndex=3) Begin
+                    Move  43 to uaBom[3]   
+                End
+                Else If (iIndex=4) Begin
+                    Move  47 to uaBom[3]   
+                End
+                Else If (iIndex=5) Begin
+                    Move  56 to uaBom[3] 
+                    Move  45 to uaBom[4]  
+                End
+                Else Begin
+                    Error DFERR_PROGRAM 'Insufficient BOM information provided'
+                    Function_Return (ResizeArray(uaBom,0))
+                End
+                Case Break              
+        Case End        
+        Function_Return uaBom
+    End_Function
+    
+    {Visibility=Private}  
+    Function RemoveByteOrderMark UChar[] uaInput Integer ByRef eByteOrderMark Returns UChar
+        Integer eBom iIndex eFoundBom
+        UChar[] uaBom
+        
+        Move eBomNone to eFoundBom
+        For eBom from eBomUtf7 to eBomUtf16le   // important that our enum list is ordered from longest to shortest else we might get a false match
+            If (eBom=eBomUtf7) Begin
+                For iIndex from 1 to 5    
+                    Get ByteOrderMarksByEncoding eBom (6-iIndex) to uaBom   // pass in the order of Index5, then 4, 3 etc so we deal with longest first
+                    If (IsSameArray(ResizeArray(uaInput,SizeOfArray(uaBom)),uaBom)) Begin
+                        Move eBom to eFoundBom    
+                    End
+                    If (eFoundBom>eBomNone) ;
+                        Break
+                Loop
+            End
+            Else Begin
+                Get ByteOrderMarksByEncoding eBom to uaBom
+                If (IsSameArray(ResizeArray(uaInput,SizeOfArray(uaBom)),uaBom)) Begin
+                    Move eBom to eFoundBom       
+                End   
+            End
+            If (eFoundBom<>eBomNone) ;
+                Break 
+        Loop
+        If (eFoundBom<>eBomNone) Begin
+            While (SizeOfArray(uaBom)>0)
+                Move (RemoveFromArray(uaInput,0)) to uaInput
+                Move (RemoveFromArray(uaBom,  0)) to uaBom
+            Loop
+        End
+        If (num_arguments>1) Begin
+            Move eFoundBom to eByteOrderMark
+        End
+        Function_Return uaInput
+    End_Function
+
+    {Visibility=Private}
+    Procedure RemoveByteOrderMark String ByRef sData Integer ByRef eByteOrderMark
+        UChar[] uaData
+        
+        Move (StringToUCharArray(sData))  to uaData
+        If (num_arguments>1) Begin
+            Get RemoveByteOrderMark uaData (&eByteOrderMark) to uaData
+        End
+        Else Begin
+            Get RemoveByteOrderMark uaData to uaData  
+        End
+        Move (UCharArrayToString(uaData)) to sData
+    End_Procedure
+    
+    {Visibility=Private}
+    Procedure AddByteOrderMark String ByRef sData
+        UChar[] uaBom
+        
+        Get ByteOrderMarksByEncoding eBomUtf8 to uaBom
+        Move (UCharArrayToString(uaBom)+sData) to sData
+    End_Procedure
+    
+    Procedure Destroy_Object 
+        Send Close_Channel
+        Forward Send Destroy_Object
+    End_Procedure
+    
+    {Visibility=Public}
+    Procedure Close_Channel 
+        Integer iChannel iMode
+        Handle  hoList
+        Boolean bInUse bDeleteOnNoWrite
+        String  sFileName
+        
+        Get piChannelIndex to iChannel
+        Get Object_Id of Seq_Channel_List to hoList
+        If (hoList>0) Begin
+            Move (Seq_Channel_Mode(iChannel)) to iMode
+        End
+        If (iMode<>DF_SEQ_CHANNEL_MODE_CLOSED) Begin
+            Get peFileAccess to iMode
+            If (iMode=faRead) Begin
+                Close_Input channel iChannel
+            End
+            Else Begin
+                Close_Output channel iChannel
+            End
+        End
+        If (hoList>0) Begin
+            Send Seq_Release_Channel iChannel
+        End
+        Set piChannelIndex to DF_SEQ_CHANNEL_NOT_AVAILABLE
+        
+        Get pbInUse to bInUse
+        If (not(bInUse)) Begin
+            Get pbDeleteOnNoWrite to bDeleteOnNoWrite
+            If (bDeleteOnNoWrite and iMode=faWrite) Begin
+                Get psFileName to sFileName
+                If (DoesFileExist(sFileName)) Begin
+                    EraseFile sFileName // EraseFile won't put it in the recycle bin       
+                End
+            End
+        End  
+        Else Begin
+            Set pbInUse to False
+        End
+    End_Procedure
+    
+    {Visibility=Public}
+    Function Open_Channel Returns Integer
+        Integer eAccess iChannel eMode
+        String  sFileName sDataPath
+        Boolean bExists bEof bInUse
+        
+        Move False to bInUse
+        Move DF_SEQ_CHANNEL_NOT_AVAILABLE to iChannel
+        Get psFileName to sFileName
+        If (Trim(sFileName)='') Begin
+            Error DFERR_PROGRAM 'Filename has not be set' 
+            Function_Return iChannel
+        End    
+        // it is expected that psFileName will contain the qualified path, but just in case, assume to be in Data Directory
+        If (not(IsFileNameQualified(sFileName))) Begin
+            Get psDataPath of (phoWorkspace(ghoApplication)) to sDataPath
+            Move (Format_FilePath(sDataPath)-sFileName) to sFileName   
+        End
+        Get peFileAccess to eAccess
+        If (eAccess=faRead) Begin
+            Move (DoesFileExist(sFileName)) to bExists
+            If (not(bExists)) Begin
+                Error DFERR_PROGRAM 'File not found for reading'
+                Function_Return iChannel     
+            End
+        End
+        Else If (eAccess=faAppend) Begin
+            Move (DoesFileExist(sFileName)) to bInUse    
+        End
+        Move (Seq_New_Channel()) to iChannel
+        Set piChannelIndex to iChannel
+        If (iChannel<>DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+            Get peFileMode to eMode
+            If (eMode=fmBinary) Begin
+                Move ("binary: "+sFileName) to sFileName
+            End
+            Case Begin
+                Case (eAccess=faRead)
+                    Direct_Input channel  iChannel sFileName
+                    Send Initialise of oSeqFileHandlerRow
+                    Case Break
+                Case (eAccess=faWrite)
+                    Direct_Output channel iChannel sFileName
+                    Case Break
+                Case (eAccess=faAppend)
+                    Append_Output channel iChannel sFileName
+                    Case Break     
+            Case End
+        End
+        Set pbInUse to bInUse
+        Function_Return iChannel    
+    End_Function
+    
+    // Fetches the row loaded into the oSeqFileHandlerRow
+    // and returns it as an entire string
+    // Yuo should only call this after a READ_LINE call
+    {Visibility=Public}
+    Function Fetch_Row Returns String
+        String sRow
+        Get RowStr of oSeqFileHandlerRow to sRow
+        Function_Return sRow
+    End_Function
+    
+    // Note - this is a 1 based function. "Fetch_Row_Value 1" will return the 1st 'column' value in the file
+    {Visibility=Public}
+    Function Fetch_Row_Value Integer iIndex Returns String
+        String sValue
+        Get Row_Value of oSeqFileHandlerRow iIndex to sValue
+        Function_Return sValue
+    End_Function
+    
+    // ToDo: Should we consider an equivalent whereby column values could be retreived via the column header name?
+    {Visibility=Public}    
+    Function Fetch_Row_Values Returns String[]
+        String[] saValues
+        Get Row_Values of oSeqFileHandlerRow to saValues
+        Function_Return saValues
+    End_Function
+    
+    {Visibility=Public}
+    Function Row_Column_Count Returns Integer
+        Integer iColumns
+        Boolean bInUse
+        
+        Move -1 to iColumns
+        Get pbInUse of oSeqFileHandlerRow to bInUse
+        If (bInUse) Begin
+            Get piColumnCount of oSeqFileHandlerRow to iColumns
+        End
+        Function_Return iColumns
+    End_Function
+    
+    // Procedure Read_Line (FILE_FIRST_ROW or FILE_NEXT_ROW)
+    // Simply reads in the next row into the oSeqFileHandlerRow object
+    // and uses the (global) FOUND indicator to say if there is data or not
+    {Visibility=Public}
+    Procedure Read_Line Integer eReadFlg
+        Integer iCh eAccess
+        Boolean bOk bSkipBlanks bEof
+        String  sLine
+        
+        Get pbSkipBlankRows to bSkipBlanks
+        Get peFileAccess to eAccess
+        If (eAccess=faUndefined and eReadFlg=FILE_FIRST_ROW) Begin
+            Move faRead to eAccess
+            Set peFileAccess to eAccess 
+        End
+        If (eAccess=faRead) Begin
+            Get piChannelIndex to iCh
+            If (eReadFlg=FILE_FIRST_ROW and iCh=DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                Get Open_Channel to iCh        
+            End
+            If (iCh<>DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                Repeat
+                    Send Load_Row of oSeqFileHandlerRow    
+                    Get Fetch_Row to sLine
+                    Move (Trim(sLine)) to sLine
+                    If (sLine='') Begin
+                        Get pbEof of oSeqFileHandlerRow to bEof
+                        Move bEof to bOk
+                        If (not(bOk)) Begin
+                            Move (not(bSkipBlanks)) to bOk
+                        End
+                    End 
+                    Else Begin
+                        Move True to bOk
+                    End
+                Until bOk
+                Move bOk to Found
+                If (bEof) Begin
+                    Send Close_Channel
+                    Move False to Found
+                End
+            End
+        End   
+    End_Procedure
+
+    {Visibility=Public}
+    Function Read_File Returns UChar[]
+        Integer iCh eAccess
+        Boolean bAutoRemoveByteOrderMark
+        UChar[] uaFile
+
+        Get peFileAccess to eAccess
+        If (eAccess=faUndefined) Begin
+            Move faRead to eAccess
+            Set peFileAccess to eAccess 
+        End
+        If (eAccess=faRead) Begin
+            Get piChannelIndex to iCh
+            If (iCh=DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                Get Open_Channel to iCh        
+            End
+            If (iCh<>DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                Read_Block channel iCh uaFile -1
+                Get pbAutoRemoveByteOrderMark to bAutoRemoveByteOrderMark
+                If bAutoRemoveByteOrderMark Begin
+                    Get RemoveByteOrderMark uaFile to uaFile
+                End
+                Send Close_Channel
+            End
+        End 
+        Function_Return uaFile
+    End_Function
+    
+    {Visibility=Public}
+    Procedure Write_File UChar[] uaData
+        Integer eAccess iCh
+        Boolean bAutoAddByteOrderMark
+        UChar[] uaBom
+        
+        Get peFileAccess to eAccess
+        If (eAccess=faUndefined) Begin
+            Move faWrite to eAccess
+            Set peFileAccess to eAccess 
+        End
+        If (eAccess=faWrite) Begin
+            Get piChannelIndex to iCh
+            If (iCh=DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                Get Open_Channel to iCh        
+            End
+            If (iCh<>DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                Get pbAutoAddByteOrderMark to bAutoAddByteOrderMark
+                If bAutoAddByteOrderMark Begin
+                    Get ByteOrderMarksByEncoding eBomUtf8 to uaBom        
+                    Move (AppendArray(uaBom,uaData)) to uaData
+                End
+                Write channel iCh uaData
+                Send Close_Channel
+            End
+        End 
+    End_Procedure
+
+    {Visibility=Public}
+    Procedure Clear
+        Send Delete_Data of oSeqFileHandlerRow    
+    End_Procedure
+
+    {Visibility=Public}
+    Procedure Set Row_Value Integer iColumnIndex String sValue
+        Set Row_Value of oSeqFileHandlerRow iColumnIndex to sValue    
+    End_Procedure
+
+    // Write_Line
+    // If we are passed a value, we simply output this
+    // If not, we look to our record buffer and use the contents 
+    // (and assume it has been populated with Set Row_Value statements)
+    {Visibility=Public}
+    Procedure Write_Line String sData
+        Integer  eAccess iCh i
+        Boolean  bInUse bQuoted bAddByteOrderMark
+        String   sOutput sDelimeter sQualifier s sHeaderRow
+        String[] saValues
+        
+        Get peFileAccess to eAccess
+        If (eAccess=faUndefined) Begin
+            Move faWrite to eAccess
+            Set peFileAccess to eAccess 
+        End
+        If (eAccess=faWrite or eAccess=faAppend) Begin
+            Get piChannelIndex to iCh
+            If (iCh=DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                Get Open_Channel to iCh        
+            End
+            If (iCh<>DF_SEQ_CHANNEL_NOT_AVAILABLE) Begin
+                If (num_arguments=0) Begin
+                    Get Row_Values of oSeqFileHandlerRow to saValues
+                    Get psTextQualifier to sQualifier
+                    Get psDelimiter to sDelimeter
+                    For i from 0 to (SizeOfArray(saValues)-1)
+                        Move saValues[i] to s
+                        If (Left(s,1)=sQualifier and Right(s,1)=sQualifier) Begin
+                            Move True to bQuoted
+                            Move (Mid(s,Length(s)-2,2)) to s        
+                        End
+                        Else Begin
+                            Move (Pos(sDelimeter,s)>0) to bQuoted
+                        End
+                        Move (Replaces(sQualifier,s,sQualifier+sQualifier)) to s
+                        Move (SReplaces(sQualifier+sQualifier+sQualifier,s,sQualifier+sQualifier)) to s
+                        If bQuoted Begin
+                            Move (sQualifier+s+sQualifier) to s
+                        End
+                        Move s to saValues[i]
+                    Loop
+                    Move (StrJoinFromArray(saValues,sDelimeter)) to sOutput
+                End
+                Else Begin
+                    Move sData to sOutput
+                End
+                Get pbInUse to bInUse
+                If (not(bInUse)) Begin
+                    Get pbAutoAddByteOrderMark to bAddByteOrderMark
+                    Get psHeaderRow to sHeaderRow
+                    If (sHeaderRow>'') Begin
+                        If (bAddByteOrderMark) Begin
+                            Send AddByteOrderMark (&sHeaderRow)    
+                        End
+                        Writeln channel iCh sHeaderRow
+                    End
+                    Else If (bAddByteOrderMark) Begin
+                        Send AddByteOrderMark (&sOutput)    
+                    End
+                End
+                Writeln channel iCh sOutput
+                Set pbInUse to True
+            End
+        End 
+    End_Procedure
+End_Class

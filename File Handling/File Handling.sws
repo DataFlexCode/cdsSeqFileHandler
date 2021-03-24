@@ -1,0 +1,13 @@
+[Properties]
+Version=20.0
+[WorkspacePaths]
+ConfigFile=.\Programs\Config.ws
+[Preferences]
+DefaultFormHeight=12
+[Conditionals]
+Is$WebApp=False
+Is$Win64=True
+[Projects]
+Project0=Byte Order Marks.src
+Project1=Write File.src
+Project2=Read File.src

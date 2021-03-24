@@ -1,0 +1,81 @@
+Use Windows.pkg
+Use cHtmlHelp.pkg
+Use cApplication.pkg
+Use cConnection.pkg
+
+Object oHtmlHelp is a cHtmlHelp
+End_Object
+
+Object oApplication is a cApplication
+
+    Object oConnection is a cConnection
+        Use LoginEncryption.pkg
+        Use DatabaseLoginDialog.dg
+    End_Object
+
+End_Object
+
+Use cdsSeqFileHandler.pkg
+
+Object oProcess is a cObject
+    
+    Procedure RunProcess
+        Handle  hoFileHandler
+        String  sRow
+        Integer iCol iCols
+        String[] saValues
+        UChar[]  uaFile
+        
+        // create an instance
+        Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+        Set psFileName  of hoFileHandler to (psDataPath(phoWorkspace(ghoApplication))+'\cdsSeqFileHandler.csv')
+
+        // - Example 1 ---------------------------------------------------------
+
+        Send Read_Line of hoFileHandler FILE_FIRST_ROW
+        While (Found)
+            Get Row_Column_Count of hoFileHandler to iCols
+            For iCol from 1 to iCols 
+                Get Fetch_Row_Value of hoFileHandler iCol to saValues[iCol-1]   
+            Loop
+            Send Read_Line of hoFileHandler FILE_NEXT_ROW
+        Loop     
+
+        // - Example 2 ---------------------------------------------------------
+
+        Send Read_Line of hoFileHandler FILE_FIRST_ROW
+        While (Found)
+            Get Fetch_Row_Values of hoFileHandler to saValues
+            Send Read_Line of hoFileHandler FILE_NEXT_ROW
+        Loop 
+        
+        // - Example 3 ---------------------------------------------------------
+        
+        // Alternatively you could process the file by reading in an entire row
+        // at a time:
+        
+        Send Read_Line of hoFileHandler FILE_FIRST_ROW
+        While (Found)
+            Get Fetch_Row  of hoFileHandler to sRow
+            Send Read_Line of hoFileHandler FILE_NEXT_ROW
+        Loop 
+        
+        // - Example 4 ---------------------------------------------------------
+        
+        // it even supports reading the file into a UChar array
+        // Note that the BOM has been removed for you (as per the default setting)
+        Get Read_File of hoFileHandler to uaFile 
+        
+        // - Example 5 ---------------------------------------------------------
+        
+        // if we wanted to see the BOM, we could do this...
+        Set pbAutoRemoveByteOrderMark of hoFileHandler to False
+        Get Read_File of hoFileHandler to uaFile
+        
+        // when we're done, destroy our object
+        Send Destroy of hoFileHandler
+    End_Procedure
+    
+End_Object
+
+Send RunProcess of oProcess

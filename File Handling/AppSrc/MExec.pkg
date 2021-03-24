@@ -1,0 +1,43 @@
+﻿// Copied from Standard Dataflex package
+
+#IFDEF GET_SHELLEXECUTE
+#ELSE
+    External_Function ShellExecute "ShellExecuteW" Shell32.Dll ;    
+        Handle hwnd ;        
+            Pointer lpOperation ;            
+                Pointer lpFile ;                
+                    Pointer lpParameters ;                    
+                        Pointer lpDirectory ;                        
+                            Integer nShowCmd ;                            
+                                Returns VOID_TYPE                                
+#ENDIF
+
+Procedure SHExecute Global String sOperation String sFile   
+    String  sDocument sParameters    
+    WString sOp sDoc sParam sDir    
+    Pointer lpsOperation lpsDocument lpsParameters lpsPath    
+    Handle  hInstance hWnd    
+
+    Move (Trim(sOperation))  to sOp
+    Move (Trim(sFile))       to sDoc
+    Move (Trim(sParameters)) to sParam   
+   
+    // Make the strings readable for windows API, by converting them to null-terminated    
+    Move (Append(sOp   ,Character(0))) to sOp    
+    Move (Append(sDoc  ,Character(0))) to sDoc    
+    Move (Append(sParam,Character(0))) to sParam    
+    Move (Append(sDir  ,Character(0))) to sDir    
+
+    Move (AddressOf(sOp))    to lpsOperation   
+    Move (AddressOf(sDoc))   to lpsDocument    
+    Move (AddressOf(sParam)) to lpsParameters  
+    Move (AddressOf(sDir))   to lpsPath        
+
+    Get Window_Handle to hWnd    
+    Move (ShellExecute (hWnd, lpsOperation, lpsDocument, lpsParameters, lpsPath, 1)) to hInstance    
+    If (hInstance <= 32) Begin        
+        Move (Character(0)) to sOp        
+        Move (AddressOf(sOp)) to lpsOperation        
+        Move (ShellExecute (hWnd, lpsOperation, lpsDocument, lpsParameters, lpsPath, 1)) to hInstance        
+    End    
+End_Procedure

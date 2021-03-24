@@ -1,0 +1,69 @@
+﻿Use Windows.pkg
+Use cApplication.pkg
+Use cConnection.pkg
+Use MExec.pkg
+Use Dfconfrm.pkg
+
+Object oApplication is a cApplication
+    Set peHelpType to htNoHelp
+
+    Object oConnection is a cConnection
+        Use LoginEncryption.pkg
+        Use DatabaseLoginDialog.dg
+    End_Object
+End_Object
+
+Use seq_chnl.pkg
+
+Object oProcess is a cObject
+
+    Procedure RunProcess
+        Integer iCh iCancel
+        String  sPath
+            
+        Move (Seq_New_Channel()) to iCh
+        Get psDataPath of (phoWorkspace(ghoApplication)) to sPath
+        Direct_Output channel iCh (sPath-'\My File.csv')
+        Writeln channel iCh 'Column One,Column Two,Column Three,Column Four,Column Five,Column Six'
+        Writeln channel iCh 'This,is,a,test,임의의 텍스트,¯\_(ツ)_/¯'
+        Close_Output channel iCh
+        Send Seq_Release_Channel iCh
+        
+        
+        Get Confirm 'Open this file?' to iCancel
+        If (not(iCancel)) Begin
+            Send SHExecute "open" (sPath-'\My File.csv') True    
+        End
+    End_Procedure
+    
+    Procedure RunProcessWithBOM
+        Integer iCh iCancel
+        String  sPath
+        UChar[] uaBom
+
+        Move (Seq_New_Channel()) to iCh
+        Get psDataPath of (phoWorkspace(ghoApplication)) to sPath
+        Direct_Output channel iCh (sPath-'\With BOM.csv')
+            
+        Move 239 to uaBom[0]
+        Move 187 to uaBom[1]
+        Move 191 to uaBom[2]      
+        // Add the BOM that tells the reading application that this is UTF-8
+        Write   channel iCh (UCharArrayToString(uaBom))
+               
+        Writeln channel iCh 'Column One,Column Two,Column Three,Column Four,Column Five,Column Six'
+        Writeln channel iCh 'This,is,a,test,임의의 텍스트,¯\_(ツ)_/¯'
+        Close_Output channel iCh
+        Send Seq_Release_Channel iCh
+         
+
+        Get Confirm 'Open this file?' to iCancel
+        If (not(iCancel)) Begin
+            Send SHExecute "open" (sPath-'\With BOM.csv')     
+        End
+    End_Procedure 
+     
+End_Object
+
+Send RunProcess        of oProcess
+Send RunProcessWithBOM of oProcess

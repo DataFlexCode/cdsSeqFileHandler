@@ -1,0 +1,67 @@
+﻿Use Windows.pkg
+Use cHtmlHelp.pkg
+Use cApplication.pkg
+Use cConnection.pkg
+Use Dfconfrm.pkg
+Use MExec.pkg
+
+Object oHtmlHelp is a cHtmlHelp
+End_Object
+
+Object oApplication is a cApplication
+
+    Object oConnection is a cConnection
+        Use LoginEncryption.pkg
+        Use DatabaseLoginDialog.dg
+    End_Object
+End_Object
+
+Use cdsSeqFileHandler.pkg
+
+Object oProcess is a cObject
+    
+    Procedure RunProcess
+        Handle hoFileHandler
+        
+        // create an instance
+        Get CreateNamed (RefClass(cdsSeqFileHandler)) '_oFileHandler' to hoFileHandler
+        // give it a filename 
+        Set psFileName  of hoFileHandler to (psDataPath(phoWorkspace(ghoApplication))+'\cdsSeqFileHandler.csv')
+        // does it require a header row?
+        Set psHeaderRow of hoFileHandler to 'Column One,Column Two,Column Three,Column Four,Column Five,Column Six'
+        
+        // Akin to saving a record in a table, let's set the column values and then'save' this to disk with a "Write_Line"
+        Set Row_Value   of hoFileHandler 1 to 'This'
+        Set Row_Value   of hoFileHandler 2 to 'is'
+        Set Row_Value   of hoFileHandler 3 to 'a'
+        Set Row_Value   of hoFileHandler 4 to 'Test'
+        Set Row_Value   of hoFileHandler 5 to '임의의 텍스트'
+        Set Row_Value   of hoFileHandler 6 to '¯\_(ツ)_/¯'
+        Send Write_Line of hoFileHandler 
+                
+        // for the 2nd row, let's get more funky, and let's add some embedded CR and quotes (and shiz)                          
+        Set Row_Value   of hoFileHandler 1 to 'How'
+        Set Row_Value   of hoFileHandler 2 to 'does,"it"'
+        Set Row_Value   of hoFileHandler 3 to ('Cope","'+C_$CLF+'with') 
+        Set Row_Value   of hoFileHandler 4 to '"things"'
+        Set Row_Value   of hoFileHandler 5 to ('"l","i","k"'+C_$CLF+'","'+C_$CLF+'e')   
+        Set Row_Value   of hoFileHandler 6 to 'this?'
+        Send Write_Line of hoFileHandler 
+        
+        // for the 3rd row, I'm getting tired now, so let's by lazy and just output a line all in one go.
+        Send Write_Line of hoFileHandler 'Is is, also, possible to, output a, single row, in one go'
+                
+        // when we're done, destroy our object (important!)
+        Send Destroy of hoFileHandler
+        
+        
+        
+        Integer iCancel
+        Get Confirm 'Open file?' to iCancel
+        If (not(iCancel)) Begin
+            Send SHExecute "open" (psDataPath(phoWorkspace(ghoApplication))+'\cdsSeqFileHandler.csv')  
+        End
+    End_Procedure
+End_Object
+
+Send RunProcess of oProcess

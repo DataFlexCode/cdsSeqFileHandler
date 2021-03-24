@@ -1,0 +1,27 @@
+# Add any directories, files, or patterns you don't want to be tracked by version control
+*.dat
+*.k*
+*.vld
+*.hdr
+*.mtd
+*.tag
+*.cch
+*.int
+*.dsk
+*.loc
+*.prn
+*.bak
+*.pkd
+*.pbg
+*.fld
+*.exe
+*.dbg
+*.trc
+*.doc
+*.cfg
+*.log
+*.dep
+connection.ini
+DFConnId.ini
+Reindex.log
+Database.log

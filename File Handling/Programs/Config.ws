@@ -1,12 +1,12 @@
 [Workspace]
 Home=..\
 AppSrcPath=.\AppSrc
-AppHTMLPath=.\AppHtml
-BitmapPath=.\Bitmaps
-IdeSrcPath=.\IdeSrc
-DataPath=.\Data
+AppHTMLPath=.\AppSrc
+BitmapPath=.\Programs
+IdeSrcPath=.\Programs
+DataPath=.\DDSrc
 DDSrcPath=.\DDSrc
-HelpPath=.\Help
+HelpPath=.\Programs
 ProgramPath=.\Programs
-FileList=.\Data\Filelist.cfg
+FileList=.\DDSrc\Filelist.cfg
 Description=File Handling Demo

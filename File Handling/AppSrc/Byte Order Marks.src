@@ -17,53 +17,45 @@ Use seq_chnl.pkg
 
 Object oProcess is a cObject
 
-    Procedure RunProcess
-        Integer iCh iCancel
-        String  sPath
-            
-        Move (Seq_New_Channel()) to iCh
-        Get psDataPath of (phoWorkspace(ghoApplication)) to sPath
-        Direct_Output channel iCh (sPath-'\My File.csv')
-        Writeln channel iCh 'Column One,Column Two,Column Three,Column Four,Column Five,Column Six'
-        Writeln channel iCh 'This,is,a,test,임의의 텍스트,¯\_(ツ)_/¯'
-        Close_Output channel iCh
-        Send Seq_Release_Channel iCh
-        
-        
-        Get Confirm 'Open this file?' to iCancel
-        If (not(iCancel)) Begin
-            Send SHExecute "open" (sPath-'\My File.csv') True    
-        End
-    End_Procedure
-    
-    Procedure RunProcessWithBOM
-        Integer iCh iCancel
-        String  sPath
+    Procedure WriteBom Integer iCh
         UChar[] uaBom
-
-        Move (Seq_New_Channel()) to iCh
-        Get psDataPath of (phoWorkspace(ghoApplication)) to sPath
-        Direct_Output channel iCh (sPath-'\With BOM.csv')
-            
         Move 239 to uaBom[0]
         Move 187 to uaBom[1]
         Move 191 to uaBom[2]      
         // Add the BOM that tells the reading application that this is UTF-8
         Write   channel iCh (UCharArrayToString(uaBom))
-               
+    End_Procedure
+
+    Procedure RunProcess Boolean bWithBom
+        Integer iCh iCancel
+        String  sPath
+            
+        Move (Seq_New_Channel()) to iCh
+        Get psDataPath of (phoWorkspace(ghoApplication)) to sPath
+        If (bWithBom) Begin
+            Append sPath '\With BOM.csv'
+            Send Info_Box ("Creating a CSV with ByteOrderMark (BOM)\n"+sPath)
+        End
+        Else Begin
+            Append sPath '\My File.csv'
+            Send Info_Box ("Creating a CSV without BOM\n"+sPath)
+        End
+        Direct_Output channel iCh sPath
+        If (bWithBom) Begin
+            Send WriteBom iCh
+        End
         Writeln channel iCh 'Column One,Column Two,Column Three,Column Four,Column Five,Column Six'
         Writeln channel iCh 'This,is,a,test,임의의 텍스트,¯\_(ツ)_/¯'
         Close_Output channel iCh
         Send Seq_Release_Channel iCh
-         
-
+        
         Get Confirm 'Open this file?' to iCancel
         If (not(iCancel)) Begin
-            Send SHExecute "open" (sPath-'\With BOM.csv')     
+            Send SHExecute "open" sPath True    
         End
-    End_Procedure 
-     
+    End_Procedure
+    
 End_Object
 
-Send RunProcess        of oProcess
-Send RunProcessWithBOM of oProcess
+Send RunProcess of oProcess True
+Send RunProcess of oProcess False

@@ -25,3 +25,4 @@ connection.ini
 DFConnId.ini
 Reindex.log
 Database.log
+*.csv
